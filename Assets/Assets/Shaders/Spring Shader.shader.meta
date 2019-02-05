@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: c1e27942196594348a694f6f2ed983e6
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures:
+  - _SkyTex: {fileID: 2800000, guid: 8aad9d9563a70ee4a9f86dd5b027a106, type: 3}
+  - _TextureSample1: {fileID: 2800000, guid: 50de7d62666e88647be03746955f5bae, type: 3}
+  - _TextureSample0: {fileID: 2800000, guid: 50de7d62666e88647be03746955f5bae, type: 3}
+  - _TextureSample2: {fileID: 2800000, guid: 50de7d62666e88647be03746955f5bae, type: 3}
+  - _TextureSample4: {fileID: 2800000, guid: 50de7d62666e88647be03746955f5bae, type: 3}
+  - _TextureSample3: {fileID: 2800000, guid: 50de7d62666e88647be03746955f5bae, type: 3}
+  - _SpriteShape: {fileID: 2800000, guid: 4ddd7565e4b24b94794e4d8b4b727cf0, type: 3}
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
