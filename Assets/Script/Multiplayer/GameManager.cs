@@ -1,12 +1,14 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.PostProcessing;
 using UnityEngine.UI;
 
-public class GameManager : MonoBehaviour {
+public partial class GameManager : MonoBehaviour {
 
     //SIngleton
     public static GameManager gm;
+    public GameObject defaultRewired;
 
     //Prefab tiles go here:
     [Header("Prefabs")]
@@ -59,8 +61,8 @@ public class GameManager : MonoBehaviour {
     public float preCountDown;
     public Text p1Mes;
     public Text p2Mes;
-    public GameObject p1Canvas;
-    public GameObject p2Canvas;
+    public GameObject[] p1Canvas;
+    public GameObject[] p2Canvas;
     public bool bothReady;
 
     //For the flashy, countdown at start
@@ -74,6 +76,7 @@ public class GameManager : MonoBehaviour {
     public List<MapTile> searchFarms= new List<MapTile>();
     public List<MapTile> springTiles = new List<MapTile>();     //Starting locations for the BFS
 
+    public bool transBack;
 
     //Other variables:
     [Header("Other")]
@@ -86,6 +89,7 @@ public class GameManager : MonoBehaviour {
     public MapTile selectedTile;
     public GameObject warning;
     public int weather;         // 0-Normal, 1-Rain, 2-Sun
+    public ScreenFader sf;
 
     [Header("Multi-Round Variables")]
     //Used to track a winner
@@ -97,10 +101,46 @@ public class GameManager : MonoBehaviour {
     public float roundEndTimer;
     public Text roundText;
 
+    [Header("Player Power Variables")]
+    public int p1Power;
+    public int p2Power;
+    public float p1Timer;
+    public float p2Timer;
+    public bool p1Active;
+    public bool p2Active;
+    public GameObject cutIn;
+
+    public float maxCutInTimer;
+    public float cutInPercentIncrement;
+    [HideInInspector]
+    public float cutInTimer; public bool cutInActive; private float cutInAlpha; public float workTimerAdjust;
+    public float tarTimeScale;
+    public float maxTimeScale;
+    public float timeScaleMult;
+
+    [Header("UI Cut-In Images")]
+    public Image cutInBase;
+    //public Image cutInWhite;
+    public Image cutInMask;
+    public Image cutInBG;
+    public Image maskBG;
+    public Image portrait;
+    public Sprite[] baseFrames;
+    public Sprite[] maskFrames;
+    public Color[] cutInColors;
+    public Text[] flashingText;
+    
+
+    //Determines text to display when a power activates
+    public Text powerName;
+    public Text activationQuote;
+    public MapTile[] affectedTiles = new MapTile[2];
+
     //Instantiates the tile map, and sets primary gameplay variables
     void Awake () {
 
-        roundEndTimer = 5f;
+        roundEndTimer = 3f;
+        currentProfile.colorGrading.settings = baseProfile.colorGrading.settings;
         //Sets the timer
         /*minutes = 2;
         seconds = 0;*/
@@ -115,6 +155,10 @@ public class GameManager : MonoBehaviour {
         drawMap();
         findWaterOrigins();
         searchShell();
+
+        //Sets default position for both players
+        p1.selectedTile = curMap[0, 0];
+        p2.selectedTile = curMap[mapSize - 1, mapSize - 1];
 
         //Hides the pre-round countdown assets
         countdownWhole.SetActive(false);
@@ -133,21 +177,51 @@ public class GameManager : MonoBehaviour {
         count = 3;
         countdown.SetActive(false);
 
-        p1Canvas.SetActive(false);
-        p2Canvas.SetActive(false);
+        //Disables P1 and P2 UI elements
+        foreach(GameObject g in p1Canvas)
+        {
+            g.SetActive(false);
+        }
+        foreach(GameObject g in p2Canvas)
+        {
+            g.SetActive(false);
+        }
+
         begin = true;
 
         //Positions the second player;
         p2.posX = 5.6f * mapSize;
         p2.pCam.transform.position = new Vector3(p2.posX, 0f, 0f);
+
+        //If input hasn't been transferred from CharSelect, use default
+        if(GameObject.Find("Rewired Input Manager") == null)
+        {
+            defaultRewired.SetActive(true);
+            
+           
+        }
+        //Removes the rewired manager if one already exists
+        else
+        {
+            Destroy(defaultRewired.gameObject);
+            defaultRewired = GameObject.Find("Rewired Input Manager");
+            sf.gameObject.SetActive(true);
+        }
     }
 
+    //Sets up player-related variables
+    void Start()
+    {
+        //Finds which characters each player has selected
+        p1Power = p1.charNum;
+        p2Power = p2.charNum;
+    }
 
     // Update is called once per frame
     void Update () {
 
         //Begins the countdown
-        if (begin)
+        if (begin && !cutInActive)
         {
             if(numGames == 0)
             {
@@ -161,10 +235,34 @@ public class GameManager : MonoBehaviour {
         }
         
         twoPlayerTimer();
+        checkPower();
 
-        if (Input.GetKeyDown(KeyCode.O))
+        //Powers do not activate while the cut-in is
+        if (!cutInActive)
         {
-            searchShell();
+            updatePPEffects();
+        }
+
+
+        //Transitions back to character select
+        if (transBack)
+        {
+            sf.gameObject.SetActive(true);
+            sf.fadeIn = false;
+            sf.targetScene = 1;
+        }
+
+        if (Input.GetKeyDown(KeyCode.P))
+        {
+            if(Time.timeScale > 0f)
+            {
+                Time.timeScale = 0f;
+            }
+            else
+            {
+                Time.timeScale = 1f;
+            }
+            
         }
     }
 
@@ -200,6 +298,8 @@ public class GameManager : MonoBehaviour {
     public void drawMap()
     {
         for (int i = 0; i < mapSize; i++)
+        //(3.2f*i)+ (3.2f * j), (-1.6f*j)+(1.6f*i),(j*-0.2f)+(i*2f)
+        //(3.2f*i)+ (3.2f * j), (-1.6f*j)+(1.6f*i),(j*-0.2f)+(i*2f)
         {
             //Draws each tile in sequence, then sets it to the corrosponding array position
             for (int j = 0; j < mapSize; j++)
@@ -256,8 +356,14 @@ public class GameManager : MonoBehaviour {
         }
 
         //Resets the number of workers each player has
-        p1.assignedWorkers = 0;
-        p2.assignedWorkers = 0;
+        p1.assignedWorkers = 0; p1.killedWorkers = 0;
+        p2.assignedWorkers = 0; p2.killedWorkers = 0;
+
+        //Resets player powers as well
+        p1Timer = 0;
+        p1.powerCooldown = 0f;
+        p2Timer = 0;
+        p2.powerCooldown = 0f;
     }
 
     //Places spring tiles in the same, dedicated location each time
@@ -326,8 +432,8 @@ public class GameManager : MonoBehaviour {
                     continue;
                 }
 
-                //Farm tiles...
-                if(t.tileNum == 2)
+                //Uncontested Farm tiles...
+                if(t.tileNum == 2 && t.opposingWorker == 0)
                 {
                     //Debug.Log("Searched Farm");
                     //Farm tiles spread water to nearby tiles if they're controlled by the same player
@@ -524,8 +630,17 @@ public class GameManager : MonoBehaviour {
             //Activates the normal player UI
             p1Mes.gameObject.SetActive(false);
             p2Mes.gameObject.SetActive(false);
-            p1Canvas.SetActive(true);
-            p2Canvas.SetActive(true);
+
+            //Reenables previously disabled UI elements
+            foreach (GameObject g in p1Canvas)
+            {
+                g.SetActive(true);
+            }
+            foreach (GameObject g in p2Canvas)
+            {
+                g.SetActive(true);
+            }
+
             introMes.text = introText;
             introMes.GetComponent<TextChanger>().changeColor(Color.red);
 
@@ -674,9 +789,20 @@ public class GameManager : MonoBehaviour {
                 countdown.SetActive(false);
             }
 
+            //Automatically ends round if a player is out of workers
+            if(p1.workers <= 0 || p2.workers <= 0)
+            {
+                roundFinish = true;
+                gameStart = false;
+                vAdded = false;
+                countdown.SetActive(false);
+            }
+
 
             //Increments the timer
             seconds -= Time.deltaTime;
+
+
         }
         else
         {
@@ -713,7 +839,7 @@ public class GameManager : MonoBehaviour {
                 roundText.text = "ROUND " + numGames;
 
                 //Determines winner of the round
-                if (p1.money > p2.money)
+                if ((p1.money > p2.money && p1.workers > 0) || (p2.workers <= 0 && p1.workers > 0))
                 {
                     winMes.text = "P1 WINS!";
 
@@ -724,7 +850,7 @@ public class GameManager : MonoBehaviour {
                         vAdded = true;
                     }      
                 }
-                else if (p2.money > p1.money)
+                else if ((p2.money > p1.money && p2.workers > 0) || (p1.workers <= 0 && p2.workers > 0))
                 {
                     winMes.text = "P2 WINS!";
 
@@ -780,6 +906,10 @@ public class GameManager : MonoBehaviour {
                     //...otherwise, starts the next round.
                     else
                     {
+                        //Resets player powers
+                        p1Timer = 0f;
+                        p2Timer = 0f;
+
                         panel.SetActive(false);
                         roundReset();
                     }
@@ -795,7 +925,7 @@ public class GameManager : MonoBehaviour {
         begin = true;
         roundFinish = false;
         gameStart = false;
-        roundEndTimer = 5f;
+        roundEndTimer = 3f;
         count = 3;
         preCountDown = 10;
         countdown.SetActive(false);
@@ -810,6 +940,8 @@ public class GameManager : MonoBehaviour {
         p2.maxWorkers = (int)Mathf.Pow(2, numGames + 1);
         p1.expectedIncome = (int)Mathf.Pow(2, numGames) * 20;
         p2.expectedIncome = (int)Mathf.Pow(2, numGames) * 20;
+
+
     }
 
     //Makes a big number countdown for the last couple of seconds on the timer
@@ -844,6 +976,8 @@ public class GameManager : MonoBehaviour {
             * spawnWarning()
             * checkAdjacent()
             * returnPlayer()
+            * returnPlayerPower()
+            * getPlayerDistance()
     -------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
    
     //Spawns a warning marker
@@ -932,6 +1066,50 @@ public class GameManager : MonoBehaviour {
         {
             return null;
         }
+    }
+
+    //Returns the opposite player to the one sent
+    public PlayerClass returnOppositePlayer(PlayerClass p)
+    {
+        int temp;
+        if(p.pNum == 1)
+        {
+            temp = 2;
+        }
+        else
+        {
+            temp = 1;
+        }
+
+        return returnPlayer(temp);
+    }
+
+    //Returns how long the player's power is lasting
+    public float returnPlayerPower(int p)
+    {
+        if(p == 1) { return p1Timer; }
+        else { return p2Timer; }
+    }
+    public float returnPlayerPower(PlayerClass p)
+    {
+        return returnPlayerPower(p.pNum);
+    }
+
+    //Returns a vector two representing the player's position
+    public Vector2 getPlayerPos(int p)
+    {
+        Vector2 dist = new Vector2(0f, 0f);
+
+        if(p == 1)
+        {
+            dist = (Vector2) p1.pCam.transform.position;
+        }
+        else
+        {
+            dist = (Vector2) p2.pCam.transform.position;
+        }
+
+        return dist;
     }
 
     /*------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1054,4 +1232,473 @@ public class GameManager : MonoBehaviour {
         //Otherwise...
         return false;
     }
+
+
+    /*------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       PLAYER POWER RELATED FUNCTIONS HELD HERE:
+           * actPower()
+           * checkPower()
+       -------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+    //Sets a given player's power to activate
+    public void actPower(int player, float time)
+    {
+        //Sets the given timer for the player's power
+        if(player == 1)
+        {
+            p1Timer = time;
+           // p1Active = true;
+            powerName.text = Glossary.gs.powerNames[p1Power];
+            activationQuote.text = Glossary.gs.getQuote(p1Power);
+
+            //Exception made for both variants of norm
+            if(p1Power > 0)
+            {
+                cutInBG.color = cutInColors[p1Power - 1];
+            }
+            else
+            {
+                cutInBG.color = cutInColors[0];
+            }
+            
+
+            //Changes the color of the display text
+            foreach(Text t in flashingText)
+            {
+                t.color = Color.cyan;
+            }
+
+            changeCutIn(1);
+            AudioManager.am.playJingle(jingles[p1.charNum], 1f);
+        }
+        else if (player == 2)
+        {
+            p2Timer = time;
+           // p2Active = true;
+            powerName.text = Glossary.gs.powerNames[p2Power];
+            activationQuote.text = Glossary.gs.getQuote(p2Power);
+
+            //Exception made for both variants of norm
+            if(p2Power > 0)
+            {
+                cutInBG.color = cutInColors[p2Power - 1];
+            }
+            else
+            {
+                cutInBG.color = cutInColors[0];
+            }
+
+
+            //Changes the color of the display text
+            foreach (Text t in flashingText)
+            {
+                t.color = Color.magenta;
+            }
+
+            changeCutIn(2);
+            AudioManager.am.playJingle(jingles[p2.charNum], 1f);
+        }
+
+        //Activates the Cut-In
+        cutInTimer = maxCutInTimer;
+        cutInActive = true;
+        
+        
+        cutIn.SetActive(true);
+    }
+
+    //Overloaded of actPower takes an affected MapTile as well
+    public void actPower(int player, float time, MapTile tile)
+    {
+        affectedTiles[player - 1] = tile;
+        actPower(player, time);
+    }
+
+    //Used in "Update()" to go over the player's powers
+    public void checkPower()
+    {
+        cutInBG.color = new Color(cutInBG.color.r, cutInBG.color.g, cutInBG.color.b, cutInAlpha);
+
+        //If the cut-in is there...
+        if (cutInActive)
+        {
+            changeCutInMaskSprite(cutInTimer, maxCutInTimer);
+            cutInTimer -= Time.unscaledDeltaTime;
+            
+            //Has background fade in
+            if (cutInAlpha < 0.75f)
+            {
+                cutInAlpha += Time.unscaledDeltaTime * 3f;
+            }
+
+            //Deactivates the cut in once this point is reached
+            if (cutInTimer <= 0)
+            {
+                cutIn.SetActive(false);
+                cutInActive = false;
+            }
+
+            //If more than half the time is remaining...
+            if (cutInTimer / maxCutInTimer > 0.6f)
+            {
+                moveLocked = true;
+
+                //...Lowers the timescale to target
+                if (Time.timeScale > tarTimeScale)
+                {
+                    Time.timeScale -= Time.unscaledDeltaTime * timeScaleMult;
+                }
+                else if (Time.timeScale < tarTimeScale)
+                {
+                    Time.timeScale = tarTimeScale;
+                }
+            }
+            //If less than that time remains...
+            else if (cutInTimer / maxCutInTimer < 0.4f)
+            {
+                moveLocked = false;
+
+                //...Raises the timescale back up to normal
+                if (Time.timeScale < maxTimeScale)
+                {
+                    Time.timeScale += Time.unscaledDeltaTime * timeScaleMult;
+                }
+                else if (Time.timeScale > maxTimeScale)
+                {
+                    Time.timeScale = maxTimeScale;
+                }
+            }
+
+        }
+        //If the cut-in is no longer active...
+        else
+        {
+            //Causes time to distort gradually, if done outside powers
+            if (Time.timeScale < maxTimeScale - 0.1f)
+            {
+                Time.timeScale += timeScaleMult * Time.unscaledDeltaTime;
+            }
+            else if (Time.timeScale > maxTimeScale + 0.1f)
+            {
+                Time.timeScale -= timeScaleMult * Time.unscaledDeltaTime;
+            }
+            else
+            {
+                Time.timeScale = maxTimeScale;
+            }
+
+        }
+
+            //Has background fade out
+            if (cutInAlpha > 0f)
+            {
+                cutInAlpha -= Time.unscaledDeltaTime * timeScaleMult;
+            }
+
+        //Powers don't activate until cut in almost gone
+        if(!cutInActive)
+        {
+            //Decrements the power timers
+            if (p1Timer > 0f)
+            {
+                p1Timer -= Time.deltaTime;
+            }
+            if (p2Timer > 0f)
+            {
+                p2Timer -= Time.deltaTime;
+            }
+
+            checkPowerPlayer(p1, ref p1Timer, p1Power, ref p1Active);
+            checkPowerPlayer(p2, ref p2Timer, p2Power, ref p2Active);
+        }
+
+        //}
+    }
+
+    //Checks the powers related to timers with this function
+    public void checkPowerPlayer(PlayerClass p, ref float pTimer, int pPower, ref bool active)
+    {
+        //------------------------------------------------------------------------------------------------
+        //If the player timer is still going...
+        //------------------------------------------------------------------------------------------------
+        if (pTimer > 0f)
+        {
+            //...increments the time...
+            pTimer -= Time.deltaTime;
+
+            //Norm's power changes Time.timescale, as well as costs
+            if (pPower == Glossary.gs.character["Norm"] || pPower == Glossary.gs.character["NormF"])
+            {
+                //Speeds up the player...
+                p.pressTimeDelayMax = 0f;
+                p.xSpeed = 40f;
+                p.ySpeed = 40f;
+                p.camSpeed = 40f;
+
+                //Slows down time...
+                //                maxTimeScale = 0.5f;
+                norm = true;
+
+                //Activates norm's sound
+                if (!active)
+                {
+                    AudioManager.am.play(normSounds[0]);
+                }
+            }
+
+            //When time begins, Raine changes the weather to rain
+            if (pPower == Glossary.gs.character["Raine"])
+            {
+                //If it's already raining, clears the weather
+                if (weather == 1)
+                {
+                    weather = 0;
+                }
+                //Otherwise, changes it to rain
+                else
+                {
+                    weather = 1;
+                }
+            }
+
+            //When time begins, calculates effect of Rivan's power
+            if (pPower == Glossary.gs.character["Rivan"])
+            {
+                //If the player is behind on games...
+                if((p.pNum == 1 && p1V < p2V) || (p.pNum == 2 && p1V > p2V))
+                {
+                    workTimerAdjust = 0.5f;
+                }
+
+                //If instead, the player is wining...
+                else if ((p.pNum == 1 && p1V > p2V) || (p.pNum == 2 && p1V < p2V))
+                {
+                    workTimerAdjust = 1.33f;
+                }
+
+                //If the player has less workers than the enemy...
+                        else if (p.workers < returnOppositePlayer(p).workers)
+                {
+                    workTimerAdjust = 0.75f;
+                }
+                //If the player isn't in debt, follows this formula:
+                else if (p.money > 0)
+                {
+                    workTimerAdjust = p.money / (p1.money + p2.money) + 0.5f;
+                }
+                else
+                {
+                    workTimerAdjust = 1 / (p1.money + p2.money + Mathf.Abs(p.money) + 1) + 0.5f;
+                }
+
+            }
+            //Sets the tile on fire after the cut-in portrait disappears
+            if(pPower == Glossary.gs.character["Flint"])
+            {
+                //If the cut in is gone...
+                if (!cutInActive)
+                {
+                    //Ignites the tile
+                    if (affectedTiles[p.pNum - 1] != null && pTimer > 0f)
+                    {
+                        affectedTiles[p.pNum - 1].ignite(1f);
+                        pTimer = 0f;
+                    }
+                }
+            }
+            //Changes tile to spring when the cut-in portrait disappears
+            if (pPower == Glossary.gs.character["Sui"])
+            {
+                //If the cut in is gone...
+                if (!cutInActive)
+                {
+                    //Converts tile to a spring, then adds it to the spring list
+                    affectedTiles[p.pNum - 1].tileNum = 4;
+                    springTiles.Add(affectedTiles[p.pNum - 1]);
+                    searchShell();
+                }
+            }
+
+            //When time begins, converts the tile to your control
+            if (pPower == Glossary.gs.character["Regina"])
+            {
+                //If there is a worker, the tile is under the player's control
+                if (affectedTiles[p.pNum - 1].workerAssigned != 0)
+                {
+                    affectedTiles[p.pNum - 1].controllingPlayer = p.pNum;
+                }
+                //If there is no worker on the tile, immediately ends the effect
+                else if(affectedTiles[p.pNum - 1].workerAssigned == 0)
+                {
+                    //Resets assigned worker changes
+                    p.assignedWorkers += 1;
+                    returnOppositePlayer(p).assignedWorkers -= 1;
+
+                    //Ends the effect timer
+                    pTimer = 0f;
+                }
+
+            }
+
+            if (pPower == Glossary.gs.character["Cash"])
+            {
+                if (!active)
+                {
+                    p.warningMes.text = "BORROWED $2000!";
+                    p.flash.flash(Color.green);
+                    p.warningAlpha = 3.0f;
+                }
+            }
+
+            
+
+            //Turns the ability active for powers with once-activations
+            active = true;
+        }
+        //------------------------------------------------------------------------------------------------
+        //Once the player power timer ends...
+        //------------------------------------------------------------------------------------------------
+        if (pTimer <= 0f && active)
+        {
+            if (pPower == Glossary.gs.character["Norm"] || pPower == Glossary.gs.character["NormF"])
+            {
+                maxTimeScale = 1f;
+
+                //Returns the player to normal speed
+                p.xSpeed = 20f;
+                p.ySpeed = 20f;
+                p.camSpeed = 20f;
+                p.pressTimeDelayMax = 0.12f;
+                norm = false;
+
+                //Activates norm's sound
+                if (active)
+                {
+                    AudioManager.am.play(normSounds[1]);
+                }
+            }
+
+            //...when time runs out, Cash goes into debt
+            if (pPower == Glossary.gs.character["Cash"])
+            {
+                p.money -= 3000;
+                p.warningMes.text = "RETURNED $3000!";
+                p.flash.flash(Color.green);
+                p.warningAlpha = 3.0f;
+            }
+            //...when time runs out, Sui's tile goes back to normal
+            if(pPower == Glossary.gs.character["Sui"])
+            {
+                //Only does this if the affected tile is not null
+                if(affectedTiles[p.pNum - 1] != null)
+                {
+                    //Resets the relevant tile to drain
+                    affectedTiles[p.pNum - 1].tileNum = 6;
+
+                    //Removes tile from BFS
+                    springTiles.Remove(affectedTiles[p.pNum - 1]);
+
+                    searchShell();
+                    affectedTiles[p.pNum - 1] = null;
+                }
+
+            }
+            //Retuns weather to normal after Raine's power expires
+            //TODO - map specific default weather
+            if(pPower == Glossary.gs.character["Raine"])
+            {
+                weather = 0;
+            }
+
+            //When Rivan's power expires, the affect on timers is reset
+            if(pPower == Glossary.gs.character["Rivan"])
+            {
+                workTimerAdjust = 0f;
+            }
+
+            //When Regina's power expires, the tile goes back to the original player
+            if (pPower == Glossary.gs.character["Regina"])
+            {
+                if(affectedTiles[p.pNum -1] != null)
+                {
+                    //Changes the controlling player to the opposite
+                    if (p.pNum == 1)
+                    {
+                        affectedTiles[p.pNum - 1].controllingPlayer = 2;
+                    }
+                    else if (p.pNum == 2)
+                    {
+                        affectedTiles[p.pNum - 1].controllingPlayer = 1;
+                    }
+
+                    //Clears the affected tile
+                    affectedTiles[p.pNum - 1] = null;
+                }        
+            }
+
+            //Resets the boolean - it's pass by ref
+            active = false;
+        }
+    }
+
+    //Changes the active sprite for a cut in
+    public void changeCutInMaskSprite(float time, float timeMax)
+    {
+        //Which sprite is active is determined by a function of percentage
+        float percent = (timeMax - time) / timeMax;
+
+        //Attack time
+        if(percent < cutInPercentIncrement)
+        {
+            if(percent < (cutInPercentIncrement / 3))
+            {
+                cutInBase.sprite = baseFrames[0];
+                cutInMask.sprite = maskFrames[0];
+            }
+            else if (percent < (cutInPercentIncrement / 3) * 2)
+            {
+                cutInBase.sprite = baseFrames[1];
+                cutInMask.sprite = maskFrames[1];
+            }
+            else
+            {
+                cutInBase.sprite = baseFrames[2];
+                cutInMask.sprite = maskFrames[2];
+            }
+        }
+
+        //The base Image
+        else if(percent >= cutInPercentIncrement && percent <= 1f - cutInPercentIncrement)
+        {
+            cutInBase.sprite = baseFrames[3];
+            cutInMask.sprite = maskFrames[3];
+        }
+
+        //Fade time - NOTE: Mask is one frame shorter than base
+        else
+        {
+            if (percent < (cutInPercentIncrement / 4) + (1f - cutInPercentIncrement))
+            {
+                cutInBase.sprite = baseFrames[4];
+                cutInMask.sprite = maskFrames[4];
+            }
+            else if (percent < (cutInPercentIncrement / 4) * 2 + (1f - cutInPercentIncrement))
+            {
+                cutInBase.sprite = baseFrames[5];
+                cutInMask.sprite = maskFrames[5];
+            }
+            else if (percent < (cutInPercentIncrement / 4) * 3 + (1f - cutInPercentIncrement))
+            {
+                cutInBase.sprite = baseFrames[6];
+                cutInMask.sprite = maskFrames[6];
+            }
+            else
+            {
+                cutInBase.sprite = baseFrames[7];
+            }
+        }
+
+        maskBG.sprite = cutInMask.sprite;
+    }
+
 }

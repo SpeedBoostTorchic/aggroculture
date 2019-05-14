@@ -12,11 +12,50 @@ public class TextChanger : MonoBehaviour {
     public Text parent;
     public Text[] children;
 
-	// Changes all children to match their parent
-	void Update () {
+    //
+    public bool movingText;
+    public GameObject movingObj;
+    private Vector3 basePos;
+    private Vector3 tarPos;
+    public float maxDist;
+    private float time;
+
+    void Start()
+    {
+        //Takes default position of the moving text
+        if (movingText)
+        {
+            basePos = gameObject.transform.position;
+            tarPos = movingObj.transform.position = basePos + new Vector3(Random.Range(-maxDist, maxDist), Random.Range(-maxDist, maxDist), 0f);
+        }
+    }
+
+    // Changes all children to match their parent
+    void Update () {
+
 		foreach(Text c in children)
         {
             c.text = parent.text;
+        }
+
+        //Randomly changes the text position 
+        if (movingText)
+        {
+            basePos = gameObject.transform.position;
+
+            //If it has reached it's position...
+            if (Vector3.SqrMagnitude(movingObj.transform.position - tarPos) < 0.1f|| time > 1.0f)
+            {
+                tarPos = movingObj.transform.position = basePos + new Vector3(Random.Range(-maxDist, maxDist), Random.Range(-maxDist, maxDist), 0f);
+                time = 0f;
+
+            }
+            else
+            {
+                movingObj.transform.position = Vector3.Lerp(tarPos, movingObj.transform.position, time);
+                time += Time.unscaledDeltaTime;
+            }
+            
         }
 	}
 

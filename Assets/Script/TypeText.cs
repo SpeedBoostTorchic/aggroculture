@@ -14,7 +14,11 @@ public class TypeText : MonoBehaviour {
     public Image worker;
     public Sprite empty;
     public Sprite assigned;
+
+    //Text displays
+    public Text wLevel;
     public Text fLevel;
+    
 
     public GameObject timerObj;
     public Image timerIm;
@@ -32,10 +36,12 @@ public class TypeText : MonoBehaviour {
         //If the player has selected a tile, and it is a farm...
         if (parent.selectedTile != null && parent.selectedTile.tileNum == 2)
         {
-            fLevel.text = "Water x" + (parent.selectedTile.nearWater + parent.selectedTile.nearFarm/2);
+            wLevel.text = "Water x" + (parent.selectedTile.nearWater + parent.selectedTile.nearFarm/2);
+            fLevel.text = "LvL " + parent.selectedTile.farmLevel;
         }
         else
         {
+            wLevel.text = "";
             fLevel.text = "";
         }
 
@@ -53,27 +59,55 @@ public class TypeText : MonoBehaviour {
                 ||(t.tileNum == 2 && (t.controllingPlayer == parent.pNum || t.workerAssigned == 0)))
             {
                 timerObj.SetActive(true);
-                timerIm.fillAmount = 1f - (t.timer / t.timerMax);
+                
 
                 //The timer text display is different if the tile is a growing farm
-                if (t.tileNum == 2)
+                if (t.tileNum == 2 && t.cropLevel < 3 && t.workerAssigned != 2)
                 {
                     float timerTemp = 0;
-                    if((t.nearWater > 0 || t.nearFarm > 0) && t.farmLevel < 3)
+                    if((t.nearWater > 0 || t.nearFarm > 0) && (t.cropLevel < 3 || (t.cropLevel == 3 && t.workerAssigned > 0)))
                     {
-                        timerTemp = (t.timerMax / ((t.nearWater + (t.nearFarm / 2))/3f));
-                        timerText.text = "" + (int)Mathf.Abs((timerTemp*(1f-timerIm.fillAmount)));
+                        //What maxTime looks like with the current setup
+                        timerTemp = t.timerMax/t.timerRate;
+
+                        //If the farm is still growing, the following formula determines correct amount of time remaining past all crop levels
+                        if(t.cropLevel < 3)
+                        {
+                            timerIm.fillAmount = (1f - t.timer / t.timerMax) * 0.334f + 0.333f * (t.cropLevel);
+                        }
+
+                        //Otherwise, defaults back to normal timer formula
+                        else
+                        {
+                            timerIm.fillAmount = 1f - (t.timer / t.timerMax);
+                        }
+
+
+                        timerText.text = "" + (int)(Mathf.Abs(t.timer / t.timerRate + timerTemp * (2 - t.cropLevel)) * Time.deltaTime + 1);
                     }
                     //Displays blank if the farm isn't growing
                     else
                     {
                         timerText.text = "-";
+                        timerIm.fillAmount = 0f;
                     }
                     
                 }
                 else
                 {
-                    timerText.text = "" + (int)(t.timer +1);
+                    //Standard for non-farm tiles
+                    if(t.tileNum != 2)
+                    {
+                        //timerText.text = "" + (int)(t.timer + 1);
+                        timerText.text = "" + (int)(t.timer * (Time.deltaTime/ t.timerRate) + 1);
+                        timerIm.fillAmount = 1f - (t.timer / t.timerMax);
+                    }
+                    else
+                    {
+                        timerText.text = "-";
+                        timerIm.fillAmount = 0f;
+                    }
+
                 }
                 
             }

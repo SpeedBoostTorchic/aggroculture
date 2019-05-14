@@ -4,7 +4,7 @@ using Rewired;
 using UnityEngine;
 using UnityEngine.UI;
 
-public class PlayerClass : MonoBehaviour {
+public partial class PlayerClass : MonoBehaviour {
 
     public Player player;      //Rewired player input handler
     //[HideInInspector]
@@ -27,14 +27,19 @@ public class PlayerClass : MonoBehaviour {
     private float maxY;
     private float minY;
 
+    [HideInInspector]
+    public bool powerBuffered;
+
     //Key Player Stats
     [Header("Player Stats")]
     public int pNum;
+    public int charNum;
     public float money;
     public float income;
     public float baseIncome;
     public float effectiveIncome;       //income - workers
     public float expectedIncome;        //Used to determine size of income display
+    public float powerCooldown;
     public int workers;
     public int maxWorkers;
     public int killedWorkers;           //Permanently lowers maximum worker count
@@ -58,9 +63,10 @@ public class PlayerClass : MonoBehaviour {
     //Flashes at end/when player tries to do something they can't
     public ScreenFlash flash;
     public Text warningMes;
-    private float warningAlpha;
+    [HideInInspector]
+    public float warningAlpha; public Color warningTarColor;
     private Color warningColor;
-    public float warningSpeed;
+    protected float warningSpeed;
 
     //Determines the appearance of money
     protected Color curColor;
@@ -83,6 +89,10 @@ public class PlayerClass : MonoBehaviour {
     public float camSpeed;
     protected bool buttonPressed;
 
+    //Delay between subsequent button presses for movement
+    public float pressTimeDelayMax;
+    protected float pressTimeDelay;
+
     //These lists keep track of tiles on which the player has left farms or workers
     public List<MapTile> workQueue = new List<MapTile>();
     public List<MapTile> farmQueue = new List<MapTile>();
@@ -102,6 +112,11 @@ public class PlayerClass : MonoBehaviour {
     [Header("Audio SFX")]
     public AudioClip cymbal;
     public AudioClip denied;
+    public AudioClip cashRegister;
+    public AudioClip cdReady;
+    public AudioClip placeWorker;
+    public AudioClip takeWorker;
+
 
     // Use this for initialization
     void Start()
@@ -112,6 +127,8 @@ public class PlayerClass : MonoBehaviour {
         ls = pointer.transform.localScale;
         wls = wheelObject.transform.localScale;
         workers = maxWorkers - killedWorkers;
+        destination = selectedTile;
+        curPos = selectedTile.gridPos;
 
         //Checks if the player is meant to be using pad controls
         if (!pad)
@@ -128,6 +145,12 @@ public class PlayerClass : MonoBehaviour {
         maxX = GameManager.gm.curMap[ms, ms].gameObject.transform.position.x - mmAdjust;
         minY = GameManager.gm.curMap[0, ms].gameObject.transform.position.y - mmAdjust;
         maxY = GameManager.gm.curMap[ms, 0].gameObject.transform.position.y + mmAdjust;
+
+        //Pulls data carried over from previous
+        if(DataHolder.dh != null)
+        {
+            Initialize();
+        }
     }
 
     //GUI and Variable functions kept here:
@@ -212,19 +235,37 @@ public class PlayerClass : MonoBehaviour {
         workers = maxWorkers - killedWorkers;
         if (!GameManager.gm.moveLocked)
         {
-            //Determines which control scheme in order to use
-            if (pad)
+            if (aiControlled)
             {
-                padControl();
-                wheelCode.threshold = 0.2f;
+                aiControl();
             }
             else
             {
-                mouseControl();
-
-                if (Input.GetKeyDown(KeyCode.Space))
+                //Determines which control scheme in order to use
+                if (pad)
                 {
-                    Cursor.lockState = CursorLockMode.None;
+                    padControl();
+                    wheelCode.threshold = 0.2f;
+                }
+                else
+                {
+                    mouseControl();
+
+                    if (Input.GetKeyDown(KeyCode.Space))
+                    {
+                        Cursor.lockState = CursorLockMode.None;
+                    }
+                }
+            }
+        }
+        else
+        {
+            //Goes back to character select after the game is over
+            if (GameManager.gm.gameFinish)
+            {
+                if (player.GetButtonDown("Start") || player.GetButtonDown("A"))
+                {
+                    GameManager.gm.transBack = true;
                 }
             }
         }
@@ -461,6 +502,8 @@ public class PlayerClass : MonoBehaviour {
         }
 
 
+
+
         //Moves the camera with the right stick
         if (!menuOpen)
         {
@@ -598,40 +641,31 @@ public class PlayerClass : MonoBehaviour {
             }
         }
         else
-        { //Changes the color of the particle while clicked
-            cursor.Stop();
-            cursorClick.Play();
-
-            //Left Click --> Select Worker Actions
-            if ((player.GetButton("Left Trigger")) && (wheelObject.active == false))
+        { 
+            //Activates the player's power
+            if(player.GetButton("Left Trigger") && player.GetButton("Right Trigger"))
             {
-                wheelCode.lClick = true;
-            }
-
-            //Right Click --> Purchase Actions
-            else if (player.GetButton("Right Trigger") && (wheelObject.active == false))
-            {
-                wheelCode.lClick = false;         
-            }
-
-
-                //Allows switching of wheel before wheel fully closes
-                if (wheelObject.active)
-            {
-                if(player.GetButton("Left Trigger") && !player.GetButton("Right Trigger"))
+                //If your power is off cooldown....
+                if(powerCooldown <= 0f)
                 {
-                    wheelCode.lClick = false;
+                    //Activation sequence only plays if not currently active
+                    if (GameManager.gm.cutInActive)
+                    {
+                        powerBuffered = true;
+                    }
+                    else
+                    {
+                        activatePower(charNum);
+                        
+                    }
                 }
-                if (player.GetButton("Right Trigger") && !player.GetButton("Left Trigger"))
+                else
                 {
-                    wheelCode.lClick = true;
-                }
-
+                    AudioManager.am.play(denied);
+                    warningMes.text = "COOLODOWN:  " + (int)(powerCooldown+ GameManager.gm.returnPlayerPower(pNum) + 1)+"s";
+                    warningAlpha = 3.0f;
+                }   
             }
-
-            //Sets the selection wheel to active
-            wheelObject.SetActive(true);
-            pointer.SetActive(false);
 
 
             //Sanps camera to the selection wheel
@@ -649,6 +683,25 @@ public class PlayerClass : MonoBehaviour {
                 curOffset = targetOffset;
             }
 
+        }
+
+        //Checks if power can be activated now...
+        if (powerBuffered)
+        {
+            if(!GameManager.gm.cutInActive)
+            {
+                activatePower(charNum);
+                powerBuffered = false;
+            }
+        }
+        //If the player's power is on cooldown...
+        if (powerCooldown > 0f)
+        {
+            //Checks for the proper variable based on player number
+            if (GameManager.gm.returnPlayerPower(pNum) <= 0f)
+            {
+                powerCooldown -= Time.deltaTime;
+            }
         }
 
         pointer.transform.localScale = ls * (pCam.zoomTar / pCam.zoomMin / 1.6f);
@@ -750,32 +803,40 @@ public class PlayerClass : MonoBehaviour {
         }
 
         //Dpad controls cause the cam to move one tile at a time
-        if (player.GetButtonDown("Up-Dpad"))
+        if (player.GetButtonDown("Up-Dpad") && pressTimeDelay <= 0)
         {
             findNextTile(4);
             snapped = true;
+            pressTimeDelay = pressTimeDelayMax;
         }
-        else if (player.GetButtonDown("Down-Dpad"))
+        else if (player.GetButtonDown("Down-Dpad") && pressTimeDelay <= 0)
         {
             findNextTile(3);
             snapped = true;
+            pressTimeDelay = pressTimeDelayMax;
         }
-        else if (player.GetButtonDown("Left-Dpad"))
+        else if (player.GetButtonDown("Left-Dpad") && pressTimeDelay <= 0)
         {
             findNextTile(1);
             snapped = true;
+            pressTimeDelay = pressTimeDelayMax;
         }
-        else if (player.GetButtonDown("Right-Dpad"))
+        else if (player.GetButtonDown("Right-Dpad") && pressTimeDelay <= 0)
         {
             findNextTile(2);
             snapped = true;
+            pressTimeDelay = pressTimeDelayMax;
+        }
+        if(pressTimeDelay > 0f)
+        {
+            pressTimeDelay -= Time.deltaTime;
         }
 
         //Bumpers will go to the next tile contained in the relevant list
-        //Left Bumper increments the worker list
+        //Left Bumper goes backward in worker list
         if(player.GetButtonDown("Left Bumper"))
         {
-            MapTile tm = nextInList(ref wqIndex, workQueue);
+            MapTile tm = prevInList(ref wqIndex, workQueue);
             if(tm != null && tm.selected == 0)
             {
                 selectedTile.ahead = false;
@@ -785,28 +846,18 @@ public class PlayerClass : MonoBehaviour {
                 selectedTile.selected = pNum;
                 snapped = true;
             }
+            else
+            {
+                AudioManager.am.play(denied);
+                warningMes.text = "NO WORKERS QUEUED!";
+                warningAlpha = 3.0f;
+            }
         }
 
-        //Right bumper increments the farm list
+        //Right bumper goes forward in worker list
         if(player.GetButtonDown("Right Bumper"))
         {
-            List<MapTile> removeThese = new List<MapTile>();
-
-            //...First checks that farm tiles are still farm tiles
-            foreach(MapTile m in farmQueue)
-            {
-                if(m.tileNum != 2)
-                {
-                    removeThese.Add(m);
-                }
-            }
-            foreach(MapTile m in removeThese)
-            {
-                farmQueue.Remove(m);
-            }
-
-            //...then finds the next farm tile
-            MapTile tm = nextInList(ref fqIndex, farmQueue);
+            MapTile tm = nextInList(ref wqIndex, workQueue);
             if (tm != null && tm.selected == 0)
             {
                 selectedTile.ahead = false;
@@ -815,6 +866,12 @@ public class PlayerClass : MonoBehaviour {
                 selectedTile.ahead = true;
                 selectedTile.selected = pNum;
                 snapped = true;
+            }
+            else
+            {
+                AudioManager.am.play(denied);
+                warningMes.text = "NO WORKERS QUEUED!";
+                warningAlpha = 3.0f;
             }
         }
 
@@ -903,6 +960,16 @@ public class PlayerClass : MonoBehaviour {
         else if (selectedTile.tileNum == 6)
         {
             tileIndicator.text.text = "Water Tile (Draining)";
+        }
+        //Fire
+        else if (selectedTile.tileNum == 7)
+        {
+            tileIndicator.text.text = "Fire Tile";
+        }
+        //ash
+        else if (selectedTile.tileNum == 8)
+        {
+            tileIndicator.text.text = "Ash Tile";
         }
     }
 
@@ -1020,21 +1087,28 @@ public class PlayerClass : MonoBehaviour {
             if (temp)
             {
                 selectedTile.tileNum = 2;
+                selectedTile.plantingPlayer = pNum;
                 farmQueue.Add(selectedTile);
+
                /* if (selectedTile.workerAssigned == 2)
                 {
                     selectedTile.growing = true;
                 }*/
             }
         }
-        /*/If the tile is already a farm, and the player is in control of it...
+        //If the tile is already a farm, and the player is in control of it...
         else if(selectedTile.tileNum == 2 && (selectedTile.controllingPlayer == 0 || selectedTile.controllingPlayer == pNum))
         {
             //...and the farm isn't max level, and the player has enough money
-            if(selectedTile.farmLevel < 3 && money > (100*Mathf.Pow (10f, (float)selectedTile.farmLevel)))
+            if(selectedTile.farmLevel < 3 && money > 200 * selectedTile.farmLevel)
             {
-                money -= 100 * Mathf.Pow(10f, selectedTile.farmLevel);
+                money -= 200 * selectedTile.farmLevel;
                 selectedTile.farmLevel += 1;
+
+                //Upgrading the tile resets it
+                selectedTile.cropLevel = 0;
+                selectedTile.timer = 0;
+                selectedTile.textPopped = false;
                 //checkIncome();
                 return;
             }
@@ -1058,13 +1132,15 @@ public class PlayerClass : MonoBehaviour {
                 }
                 return;
             }
-        }*/
+        }
 
         //If the action cannot complete for any reason...
         else
         {
             AudioManager.am.play(denied);
-            flash.flash(Color.red);
+            //flash.flash(Color.red);
+            warningMes.text = "CAN'T DO THAT HERE!";
+            warningAlpha = 3.0f;
         }
 
 
@@ -1118,6 +1194,9 @@ public class PlayerClass : MonoBehaviour {
                 {
                     selectedTile.controllingPlayer = 0;
                 }
+
+                //Plays removal sound
+                AudioManager.am.playTwoPlayerSound(takeWorker, 0.5f, (Vector2) selectedTile.transform.position);
             }
             //If the enemy is controlling the tile, and the player has assigned an opposing worker
             else if ((selectedTile.opposingWorker > 0) && (pNum != selectedTile.controllingPlayer))
@@ -1125,6 +1204,9 @@ public class PlayerClass : MonoBehaviour {
                 selectedTile.opposingWorker = 0;
                 assignedWorkers -= 1;
                 workQueue.Remove(selectedTile);
+
+                //Plays removal sound
+                AudioManager.am.playTwoPlayerSound(takeWorker, 0.5f, (Vector2)selectedTile.transform.position);
             }
             //If there is nothing whatsoever to remove, plays denial
             else
@@ -1186,6 +1268,9 @@ public class PlayerClass : MonoBehaviour {
                 //Ensures that tile doesn't exist in Work Queue, then adds to it
                 workQueue.Remove(selectedTile);
                 workQueue.Add(selectedTile);
+
+                //Plays add sound
+                AudioManager.am.playTwoPlayerSound(placeWorker, 0.5f, (Vector2)selectedTile.transform.position);
             }
 
             //If the player couldn't do any of the above, plays denial song
@@ -1231,7 +1316,7 @@ public class PlayerClass : MonoBehaviour {
                     }
 
                     //Resets the work timer on the tile, unless it is a growing farm
-                    if (!(selectedTile.tileNum == 2 && selectedTile.farmLevel < 3))
+                    if (!(selectedTile.tileNum == 2 && selectedTile.cropLevel < 3))
                     {      
                         selectedTile.timer = selectedTile.timerMax;
                     }
@@ -1279,6 +1364,9 @@ public class PlayerClass : MonoBehaviour {
                 //Ensures that tile doesn't exist in Work Queue, then adds to it
                 workQueue.Remove(selectedTile);
                 workQueue.Add(selectedTile);
+
+                //Plays add sound
+                AudioManager.am.playTwoPlayerSound(placeWorker, 0.75f, (Vector2)selectedTile.transform.position);
             }
 
             //If the player couldn't do any of the above, plays denial song
@@ -1411,7 +1499,7 @@ public class PlayerClass : MonoBehaviour {
                 {
                     //Finds next map tile, and assigns if it isn't selected
                     MapTile temp = GameManager.gm.curMap[tempX, tempY - 1];
-                    if(temp.selected == 0)
+                    if(temp.selected == 0 || temp.selected == pNum)
                     {
                         selectedTile.ahead = false;
                         selectedTile.selected = 0;
@@ -1500,7 +1588,7 @@ public class PlayerClass : MonoBehaviour {
     //Defaults to currently selected tile location
     public void findNextTile(int d)
     {
-       /// Debug.Log("attmepting to snap: " +stickDir);
+        /// Debug.Log("attmepting to snap: " +stickDir);
         findNextTile(d, (int)selectedTile.gridPos.x, (int)selectedTile.gridPos.y);
     }
     public void findNextTile(int d, MapTile m)
@@ -1550,5 +1638,315 @@ public class PlayerClass : MonoBehaviour {
 
         //...and returns the relevant tile
         return temp;
+    }
+    public MapTile prevInList (ref int index, List<MapTile> list)
+    {
+        MapTile temp = null;
+
+        //if the queue isn't empty...
+        if (list.Count > 0)
+        {
+            //...increments the index...
+            index -= 1;
+            if (index >= list.Count || index < 0)
+            {
+                index = list.Count-1;
+            }
+
+            temp = list[index];
+        }
+
+        //...and returns the relevant tile
+        return temp;
+    }
+
+    //Actives a power based on the character the player has selected
+    public void activatePower(int c)
+    {
+        //Cannot activate a power while it is still currently active
+        if((pNum == 1 && GameManager.gm.p1Timer > 0f) || (pNum == 2 && GameManager.gm.p2Timer > 0f))
+        {
+            return;
+        }
+
+        //Norm's power slows time down
+        if(c == Glossary.gs.character["Norm"] || c == Glossary.gs.character["NormF"])
+        {
+            GameManager.gm.actPower(pNum, 5f);
+            GameManager.gm.maxTimeScale = 0.5f;
+            powerCooldown = Glossary.gs.cooldowns[charNum];
+        }
+
+        //Rivan's power increases working rate if player is losing
+        if(c == Glossary.gs.character["Rivan"])
+        {
+            GameManager.gm.actPower(pNum, 15f);
+            powerCooldown = Glossary.gs.cooldowns[charNum];
+        }
+
+        //Flint sacrifices a worker to set the selected tile on fire
+        if(c == Glossary.gs.character["Flint"])
+        {
+            //Can only ignite tile if you control it
+            if(selectedTile.workerAssigned > 0 && selectedTile.controllingPlayer == pNum
+                && killedWorkers < maxWorkers-1 && (selectedTile.tileNum == 1 || selectedTile.tileNum == 2))
+            {
+
+                //Activates the cut-in from the GameManger
+                GameManager.gm.actPower(pNum, 10f, selectedTile);
+                powerCooldown = Glossary.gs.cooldowns[charNum];
+
+                //Kills the your worker
+                killedWorkers++;
+                selectedTile.workerAssigned = 0;
+                selectedTile.controllingPlayer = 0;
+                //selectedTile.ignite(1f);
+                workQueue.Remove(selectedTile);
+            }
+            //Displays warning messages if...
+            else
+            {
+                warningMes.text = "";
+
+                //...There are too few workers left
+                if(killedWorkers >= maxWorkers - 1)
+                {
+                    warningMes.text = "TOO FEW WORKERS!";
+                }
+                //...There is no worker on this tile.
+                else if (selectedTile.workerAssigned == 0)
+                {
+                    warningMes.text = "NO WORKER TO BURN!";
+                }
+                //...The player doesn't control this tile.
+                else if (selectedTile.controllingPlayer != pNum)
+                {
+                    warningMes.text = "TILE MUST BE YOURS!";
+                }
+                //...If it's the wrong type of tile.
+                else if(selectedTile.tileNum != 1 && selectedTile.tileNum != 2)
+                {
+                    warningMes.text = "TILE NOT FLAMMABLE!";
+                }
+
+                warningAlpha = 3.0f;
+                AudioManager.am.play(denied);
+            }
+        }
+
+        //Cash borrows money, and goes into debt after a dely
+        if(c == Glossary.gs.character["Cash"])
+        {
+            if(money > -2000)
+            {
+                money += 2000;
+                GameManager.gm.actPower(pNum, 10f);
+                powerCooldown = Glossary.gs.cooldowns[charNum];
+                warningMes.text = "BORROWED $2000!";
+                warningAlpha = 3.0f;
+                AudioManager.am.play(cashRegister);
+            }
+
+            //Too far into debt to continue borrowing
+            else
+            {
+                warningMes.text = "TOO FAR IN DEBT!";
+                warningAlpha = 3.0f;
+                AudioManager.am.play(denied);
+            }
+
+
+        }
+
+        //TODO - DECIDE POWER FOR REGINA
+        if(c == Glossary.gs.character["Regina"])
+        {
+            //If the tile is controlled by the enemy player
+            if(selectedTile.controllingPlayer != pNum && selectedTile.workerAssigned > 0)
+            {
+                //Removes your worker if it is a stalemate tile
+                if(selectedTile.opposingWorker > 0)
+                {
+                    selectedTile.opposingWorker = 0;
+                    assignedWorkers -= 1;
+                }
+                GameManager.gm.actPower(pNum, 10f, selectedTile);
+                powerCooldown = Glossary.gs.cooldowns[charNum];
+            }
+            //Power fails if...
+            else
+            {
+                //...there is no worker on the tile
+                if(selectedTile.workerAssigned == 0)
+                {
+                    warningMes.text = "NO WORKER HERE!";
+
+                }
+                //...the tile is already under your control
+                if(selectedTile.controllingPlayer == pNum)
+                {
+                    warningMes.text = "ALREADY YOURS!";
+                }
+
+                    warningAlpha = 3.0f;
+                    AudioManager.am.play(denied);
+            }
+        }
+
+        //Raine changes the weather to Rain or STOPS active rain
+        if(c == Glossary.gs.character["Raine"])
+        {
+            GameManager.gm.actPower(pNum, 30f);
+            powerCooldown = Glossary.gs.cooldowns[charNum];
+        }
+
+        //Sui changes the current tile to a spring
+        if (c == Glossary.gs.character["Sui"])
+        {
+            //Can only activate on a hole tile that is neutral or controlled by this player
+            if((selectedTile.tileNum == 0 ||  selectedTile.tileNum == 5 || selectedTile.tileNum == 6)
+                && (selectedTile.controllingPlayer == 0 || selectedTile.controllingPlayer == pNum))
+            {
+                GameManager.gm.actPower(pNum, 30f, selectedTile);
+                powerCooldown = Glossary.gs.cooldowns[charNum];
+
+                /*/Converts tile to a spring, then adds it to the spring list
+                selectedTile.tileNum = 4;
+                GameManager.gm.springTiles.Add(selectedTile);
+                GameManager.gm.searchShell();*/
+            }
+            //Power fails if...
+            else
+            {
+                //...The tile is ALREADY a spring
+                if(selectedTile.tileNum == 4)
+                {
+                    warningMes.text = "ALREADY A SPRING!";
+                }
+                //...The tile is not a pit or water
+                else if (selectedTile.tileNum != 0 || selectedTile.tileNum == 5 || selectedTile.tileNum == 6)
+                {
+                    warningMes.text = "MUST BE A HOLE!";
+                }
+                //...The tile is under enemy control
+                else if (selectedTile.controllingPlayer != 0 || selectedTile.controllingPlayer != pNum)
+                {
+                    warningMes.text = "ENEMY CONTROLLED!";
+                }
+
+
+                warningAlpha = 3.0f;
+                AudioManager.am.play(denied);
+            }
+            
+        }
+
+        //Narcia will sacrifice a worker to destroy the tile 
+        //underneath them if the tile is in stalemate
+        if (c == Glossary.gs.character["Narcia"])
+        {
+            if(selectedTile.opposingWorker > 0 && selectedTile.workerAssigned > 0)
+            {
+                //Activates GM
+                GameManager.gm.actPower(pNum, 0f);
+
+                //Attacker loses a unit, defender keeps it
+                if(selectedTile.controllingPlayer == pNum)
+                {
+                    GameManager.gm.returnOppositePlayer(this).killedWorkers++;
+                }
+                else
+                {
+                    killedWorkers++;
+                }
+                //Destroys tile and removes the workers
+                selectedTile.tileNum = 0;
+                selectedTile.opposingWorker = 0;
+                selectedTile.workerAssigned = 0;
+                selectedTile.controllingPlayer = 0;
+
+                powerCooldown = Glossary.gs.cooldowns[charNum];
+            }
+            //...The power fails if...
+            else
+            {
+                //...The tile isn't a stalemate
+                if(selectedTile.opposingWorker == 0 || selectedTile.workerAssigned == 0)
+                {
+                    warningMes.text = "NOT A STALEMATE!";
+                    warningAlpha = 3.0f;
+                    AudioManager.am.play(denied);
+                }
+                //...The tile wasn't originally the players
+                else if (selectedTile.controllingPlayer != pNum)
+                {
+                    warningMes.text = "NOT YOUR TILE!";
+                    warningAlpha = 3.0f;
+                    AudioManager.am.play(denied);
+                }
+            }
+        }
+
+        //Rose will enahnce a spring tile, then switch to Thorn
+        if(c == Glossary.gs.character["Rose"])
+        {
+            if(selectedTile.tileNum == 4)
+            {
+                charNum = Glossary.gs.character["Thorn"];
+                GameManager.gm.actPower(pNum, 20f, selectedTile);
+                powerCooldown = Glossary.gs.cooldowns[charNum];
+            }
+            else
+            {
+                warningMes.text = "MUST TARGET SPRING!";
+                warningAlpha = 3.0f;
+                AudioManager.am.play(denied);
+            }
+        }
+        //Thorn will poison a spring tile, then switch to Rose
+        if(c == Glossary.gs.character["Thorn"])
+        {
+            if(selectedTile.tileNum == 4)
+            {
+                charNum = Glossary.gs.character["Rose"];
+                GameManager.gm.actPower(pNum, 20f, selectedTile);
+                powerCooldown = Glossary.gs.cooldowns[charNum];
+            }
+            else
+            {
+                warningMes.text = "MUST TARGET SPRING!";
+                warningAlpha = 3.0f;
+                AudioManager.am.play(denied);
+            }
+        }
+
+    }
+
+    //Resets the player's important values
+    public void Reset()
+    {
+        assignedWorkers = 0;
+        killedWorkers = 0;
+
+    }
+
+    //Pulls relevant info from the DataHolder
+    public void Initialize()
+    {
+        //Pulls player 1 data
+        if (pNum == 1)
+        {
+            player = DataHolder.dh.p1;
+            charNum = DataHolder.dh.p1Num;
+            pad = DataHolder.dh.p1Pad;
+        }
+
+        //Pulls player 2 data
+        else if (pNum == 2)
+        {
+            player = DataHolder.dh.p2;
+            charNum = DataHolder.dh.p2Num;
+            pad = DataHolder.dh.p2Pad;
+        }
     }
 }

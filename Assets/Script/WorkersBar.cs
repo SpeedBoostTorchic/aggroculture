@@ -14,6 +14,7 @@ public class WorkersBar : MonoBehaviour {
 
     //Transform adjustment information
     [Header("Mid-Round Changes")]
+    public float startingScale;
     public float scaleSize;
     public float scaleSpeed;
     public float curWidth;
@@ -23,6 +24,10 @@ public class WorkersBar : MonoBehaviour {
     public Vector2 pipStartPos;
     private int numPips;
     public List<GameObject> pipList = new List<GameObject>();
+
+    public Vector2 posBase;
+    public Vector2 posAdj;
+    public Vector2 posTar;
 
     //Visuals/GameObjects
     [Header("Sprites/Visuals")]
@@ -45,12 +50,15 @@ public class WorkersBar : MonoBehaviour {
 
 	// Grabs default width, and uses it as reference
 	void Awake () {
+        startingScale = transform.localScale.x;
         defaultWidth = bar.rectTransform.sizeDelta.x;
         defaultPos = bar.rectTransform.localPosition;
         growTimer = 3f;
         size = 1.0f;
         trans = gameObject.GetComponent<RectTransform>().anchoredPosition;
-	}
+        posBase = (Vector2)gameObject.GetComponent<RectTransform>().anchoredPosition;
+
+    }
 	
 	// Update is called once per frame
 	void Update () {
@@ -143,7 +151,8 @@ public class WorkersBar : MonoBehaviour {
             if(t < 1.0f && growTimer > 0)
             {
                 t += Time.deltaTime * scaleSpeed;
-                size = Mathf.Lerp(1.0f, 3.0f - 0.33f*(GameManager.gm.numGames -2), t);
+                size = Mathf.Lerp(1.0f, 2.5f - 0.33f*(GameManager.gm.numGames -2), t);
+                posAdj = Vector2.Lerp(Vector2.zero, posTar, t);
             }
             else if (t >- 1.0f && growTimer > 0)
             {
@@ -152,14 +161,17 @@ public class WorkersBar : MonoBehaviour {
             else if (growTimer <= 0 && t > 0)
             {
                 t -= Time.deltaTime * scaleSpeed;
-                size = Mathf.Lerp(1.0f, 3.0f - 0.33f * (GameManager.gm.numGames - 2), t);
-            }else if (t < 0)
+                size = Mathf.Lerp(1.0f, 2.5f - 0.33f * (GameManager.gm.numGames - 2), t);
+                posAdj = Vector2.Lerp(Vector2.zero, posTar, t);
+            }
+            else if (t < 0)
             {
                 t = 0f;
             }
 
             //Scales the size of all associated objects below
-            gameObject.transform.localScale = new Vector3(size, size, 1f);
+            gameObject.transform.localScale = new Vector3(size*startingScale, size*startingScale, 1f);
+            trans = posBase + posAdj;
 
             //Adjusts position of the new bar to match its new size
             if (p1)

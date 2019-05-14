@@ -9,8 +9,10 @@ public class MapTile : MonoBehaviour {
 
     //Sprites go here:
     [Header("Sprites/Visuals")]
-    public Sprite grass1;
-    public Sprite rock1;
+    public Sprite[] grass;
+    public Sprite[] rock1;
+    public GameObject[] rockToppers;
+    private bool rockDeactivated;
     public Sprite water1;
     public Sprite seed;
     public Sprite pit;
@@ -20,21 +22,38 @@ public class MapTile : MonoBehaviour {
     public Sprite fire;
 
     private int cropNum;
+    private int variantNum;         //Determines which variant of the grass tile to use
+    private int subVariant;
+
     public Sprite fighting;
     public Sprite spring;
     public GameObject waterTop;
     public GameObject springTop;
     public ParticleSystem springPart;
 
+    public GameObject northCliffFace;
+    public GameObject northCliffHead;
+    public GameObject southCliffHead;
+    public Sprite pitShadow;
+
     [Header("Multi-Sprites")]
     public Sprite[] digger;
     public Sprite[] planter;
     public Sprite[] cropSprites;
+    public Sprite[] cropBackSprites;
     public Sprite[] waterDrain;     //Sprites in order for draining water animation
     public Sprite[] selectionGlow;  // 0 - P1 Active, 1 - P1 Inactive, 2 - P2 Active, 3 - P2 Inactive
+
+    public GameObject decor;
+    public Sprite[] grassDecor;
+    public GameObject fireDecor;
+    public Sprite[] pitHeads;       //1 - GG, 2 - RR, 3 - GR, 4 - RG
+    
     private int drainIndex;
     private float drainTimer;
     public float drainTimerMax;
+
+    public Glossary gsCopy;
 
     [Header("Animators")]
     public GameObject p1Worker;
@@ -57,12 +76,14 @@ public class MapTile : MonoBehaviour {
     public Vector2 gridPos;
     public SpriteRenderer sr;
     public GameObject crop;
+    public GameObject cropBack;
     public int selected;
     public bool ahead;
     public Collider2D col;
     public float timer;
     public float timerMax;
-    public float subAmount;         //The current rate at which the timer is actually decrementing
+    public float timerRate;         //The current rate at which the timer is actually decrementing
+    public bool timeActive;
 
     //Used to determine how much money the player should be making
     public float nearWater;
@@ -70,6 +91,8 @@ public class MapTile : MonoBehaviour {
     public float cropTimer;
     public bool edge;
     public int farmLevel;
+    public int cropLevel;
+    private bool isolated;
 
     //These variables tie into the Breadth-First Search
     public MapTile waterParent;
@@ -77,6 +100,7 @@ public class MapTile : MonoBehaviour {
     public bool keyTile;
     public bool searched;
     public bool idle;
+    public bool betweenTimers;
 
     //Color Variables
     [Header("Colors")]
@@ -87,6 +111,8 @@ public class MapTile : MonoBehaviour {
     public Color cropColor;
     public Color enemyColor;
     public Color springColor;
+    public Color fireColor;
+    public Color ashColor;
 
     public GameObject p1Select;
     public GameObject p2Select;
@@ -97,18 +123,23 @@ public class MapTile : MonoBehaviour {
     //public GameObject worker;
     public GameObject sGlow;
 
-    [Header("Fire")]
+    [Header("Powers/Fire")]
     public float fireSpreadChance;  //Chance per-tick of spreading fire to neighbors (goes down each spread)
     public int fireTicks;           //Remaining number of ticks
     public bool ashBonus;          //A monetary bonus from building a farm on an ash tile
     private float workerTimer;
+    public int effect;               //0 - None, 1 - Enhanced, 2 - Poisoned
+    private bool fireSpawned;
 
     //Other variables:
     [Header("Other")]
     public int tileNum;             //0 - Hole, 1 - Grass, 2 - Crop, 3 - Rock, 4 - Spring, 5 - Water, 6 - Draining Water, 7 - Fire, 8 - Ash
     public int controllingPlayer;
+    public int plantingPlayer;
     public int workerAssigned;
     public int opposingWorker;
+    public GameObject textPopUp;    //Floating text that emerges to announce monetary changes to player
+    public bool textPopped;
 
 
     // Use this for initialization
@@ -116,11 +147,18 @@ public class MapTile : MonoBehaviour {
         sr = this.gameObject.GetComponent<SpriteRenderer>();
         col = this.gameObject.GetComponent<EdgeCollider2D>();
         waterShader = waterTopSR.material;
+        timerMax = 2f + 0.5f * GameManager.gm.numGames;
         timer = timerMax;
         p1EnemySelect.GetComponent<SpriteRenderer>().color = enemyColor;
         p2EnemySelect.GetComponent<SpriteRenderer>().color = enemyColor;
-        farmLevel = 0;
+        cropLevel = 0;
+        farmLevel = 1;
         waterTop.SetActive(false);
+        timeActive = true;
+
+        //Determines which variant of the grass tile to use
+        variantNum = (int)Random.Range(0f, grass.Length);
+        subVariant = (int)Random.Range(0f, 10f);
 
         //Grabs the animators off of the sprite objects
         p1w = p1Worker.GetComponent<Animator>();
@@ -135,7 +173,10 @@ public class MapTile : MonoBehaviour {
         else
         {
             springTop.SetActive(true);
-            springPart.Play();
+
+            //ONLY PLAYERS SPRING IF NOT ALREADY PLAYING
+            if(!springPart.isPlaying)
+                springPart.Play();
         }
 
         //Grabs neighbords from GameManager
@@ -147,39 +188,96 @@ public class MapTile : MonoBehaviour {
             findWaterSpeed();
             setWaterfalls();
         }
-            
+
+        //Creates a copy of the original Glossary to avoid GAMESTART Bug
+        gsCopy = Glossary.gs;
     }
 
     // Update is called once per frame
     void Update() {
 
+
+        determineTimer();
+
+        if (isolated && (tileNum == 5))
+        {
+            waterVector1 = new Vector2(-0.5f, 0.5f);
+            waterVector2 = new Vector2(0.25f, -0.25f);
+            waterShader.SetVector("_UV1PanSpeed", waterVector1);
+            waterShader.SetVector("_UV2PanSpeed", waterVector2);
+        }
+
         if (searched)
         {
             findWaterSpeed();
+            isolated = false;
         }
 
         //Changes the max timer when each round concludes
-        if (GameManager.gm.roundFinish)
+       /* if (GameManager.gm.roundFinish)
         {
-            timerMax = 2f + 0.5f * GameManager.gm.numGames;
+            timerMax = 1f + 0.5f * GameManager.gm.numGames;
+        } */
+
+        //If one of the players is Rivan, and his power is active....
+        if ((GameManager.gm.p1Power == Glossary.gs.character["Rivan"] && GameManager.gm.p1Timer > 0f && controllingPlayer == 1) ||
+            (GameManager.gm.p2Power == Glossary.gs.character["Rivan"] && GameManager.gm.p2Timer > 0f && controllingPlayer == 2))
+        {
+            //Rivan's powers DO NOT affect farm tiles...
+            if (tileNum != 2)
+            {
+                //Timer will speed up if Rivan is losing, and slow down if he is winning
+                //timerMax = 1f + 0.5f * GameManager.gm.numGames * GameManager.gm.workTimerAdjust;
+                timerRate = (2f - GameManager.gm.workTimerAdjust) * Time.deltaTime;
+
+                //Timer rate cannot be lower than 0.5 speed
+                if (timerRate <= 0.5f * Time.deltaTime)
+                {
+                    timerRate = 0.5f * Time.deltaTime;
+                }
+            }
+        }
+        else
+        {
+            if(tileNum != 2)
+            {
+                timerRate = Time.deltaTime;
+            }
         }
 
         //---------------------------------------------------------------------------------------------------------------------------------
         //  UPDATES VALES ON TILE FOR SPECIFIC TILE TYPES
         //---------------------------------------------------------------------------------------------------------------------------------
-        
+
         //Causes crops to grow
-        if(tileNum == 2)
+        if (tileNum == 2)
         {
             crop.SetActive(true);
+            cropBack.SetActive(true);
             grow();
         }
         else
         {
             crop.SetActive(false);
-            farmLevel = 0;
+            cropBack.SetActive(false);
+            cropLevel = 0;
+            farmLevel = 1;
+            textPopped = false;
         }
 
+        //Activates/Decctivates spring
+        if(tileNum == 4)
+        {
+            springTop.SetActive(true);
+
+            if (!springPart.isPlaying)
+                springPart.Play();
+        }
+        else
+        {
+            springTop.SetActive(false);
+            springPart.Stop();
+        }
 
         //Turns water shader on if water tile
         if (tileNum == 5)
@@ -206,7 +304,8 @@ public class MapTile : MonoBehaviour {
                 //GameManager.gm.spawnWarning(controllingPlayer, this.transform);
 
                 //Time before worker dies
-                workerTimer -= Time.deltaTime;
+                if(timeActive)
+                     workerTimer -= Time.deltaTime;
 
                 //Times up - TODO, place a dying animation here
                 if(workerTimer <= 0)
@@ -219,7 +318,8 @@ public class MapTile : MonoBehaviour {
             //Ticks down the fire timer
             if(fireTicks > 0)
             {
-                timer -= Time.deltaTime;
+                if (timeActive)
+                    timer -= Time.deltaTime;
 
                 //When a tick is reached...
                 if(timer <= 0)
@@ -227,12 +327,13 @@ public class MapTile : MonoBehaviour {
                     float seed = Random.Range(0f, 1f);
 
                     //Checks to see if it can ignite any of the adjacent tiles...
-                    if(seed < fireSpreadChance)
+                    //Nearby water lowers the chance of spread
+                    if(seed < (fireSpreadChance - (nearWater * 0.1f)))
                     {
                         //...then Checks if any neighbors are grass or farm...
                         foreach(MapTile m in neighbors)
                         {
-                            if(m.tileNum == 1 || m.tileNum == 2)
+                            if(m != null && (m.tileNum == 1 || m.tileNum == 2))
                             {
                                 m.ignite(fireSpreadChance / 2);
                                 break;
@@ -432,6 +533,12 @@ public class MapTile : MonoBehaviour {
                 }
             }
         }
+        //...as well as if the tile is a fully grown farm...
+        else if (tileNum == 2 && cropLevel >= 3)
+        {
+            sGlow.SetActive(true);
+            sGlow.GetComponent<SpriteRenderer>().sprite = selectionGlow[4];
+        }
         //...and decativates if when all workers are removed
         else
         {
@@ -581,7 +688,8 @@ public class MapTile : MonoBehaviour {
         //Will only dig if the game is going
         if (!GameManager.gm.bothReady || GameManager.gm.gameStart)
         {
-            timer -= Time.deltaTime;
+            if (timeActive)
+                timer -= timerRate;
         }
 
         //When the timer reaches zero, changes the tile
@@ -610,8 +718,8 @@ public class MapTile : MonoBehaviour {
         //Will only plant if the game is going
         if ((!GameManager.gm.bothReady || GameManager.gm.gameStart) && tileNum != 2)
         {
-
-            timer -= Time.deltaTime;
+            if (timeActive)
+                timer -= Time.deltaTime;
 
 
             //When timer reaches zero, performs an action based on the tile
@@ -653,78 +761,241 @@ public class MapTile : MonoBehaviour {
     //Crops will do this regardless of who works on them
     public void grow()
     {
+        //Pops up a message for the player
+        if (!textPopped)
+        {
+            FloatingText ft = Instantiate(textPopUp, transform.position + new Vector3(0f, 0.25f, -50f), Quaternion.identity).GetComponent<FloatingText>();
+            ft.positive = false;
+            if (plantingPlayer == 2)
+            {
+                ft.player = 2;
+            }
+
+            if(farmLevel == 1)
+            {
+                ft.text = "- $100";
+            }
+            else if(farmLevel == 2)
+            {
+                ft.text = "- $200";
+            }
+            else
+            {
+                ft.text = "- $400";
+            }
+            
+            textPopped = true;
+        }
+
         //Crops grow faster the more water tiles there are nearby
-        if (farmLevel < 3)
+        if (cropLevel < 3 && !GameManager.gm.roundFinish)
         {
             //Crops grow faster the more water is nearby
-            timer -= Time.deltaTime / 3 * (nearWater + (nearFarm / 2));
+            timerRate = (Time.deltaTime / 4f) * (nearWater + (nearFarm / 2));
+
+            if (timeActive)
+                timer -= timerRate;
         }
-        else if(workerAssigned == 2)
+        else if(workerAssigned == 2 && !GameManager.gm.roundFinish)
         {
-            
-            timer -= Time.deltaTime;
+            timerRate = Time.deltaTime;
+
+            if (timeActive && opposingWorker == 0)
+                timer -= Time.deltaTime;
         }
 
         if(timer <= 0)
         {
-            //Determines which crop sprite to use and how far along the crop is
-            farmLevel += 1;
-            if (farmLevel >= cropSprites.Length)
-            {
-                farmLevel = cropSprites.Length - 1;
-            }
 
             //Resets the timer
             timer = timerMax;
 
-            //Changes the sprite
-            crop.GetComponent<SpriteRenderer>().sprite = cropSprites[farmLevel];
-
             //If the farm is fully grown, harvests it
-            if (tileNum == 2 && farmLevel >= 3 && workerAssigned == 2)
+            if (tileNum == 2 && cropLevel >= 3 && workerAssigned == 2)
             {
                 PlayerClass p = GameManager.gm.returnPlayer(controllingPlayer);
-                p.money += 1000;
-                if (ashBonus) { p.money += 1000; }
+                FloatingText ft = Instantiate(textPopUp, transform.position + new Vector3(0f, 0.25f, -50f), Quaternion.identity).GetComponent<FloatingText>();
+                ft.positive = true;
+
+                if(controllingPlayer == 2)
+                {
+                    ft.player = 2;
+                }
+
+                //Player makes bonus money if ash
+                if (ashBonus) { p.money += 2000 * farmLevel; ft.text = "+ $" + (2000 * farmLevel); }
+                else { p.money += 1000*farmLevel; ft.text = "+ $" + (1000 * farmLevel); }
+
                 ashBonus = false;
                 tileNum = 1;
-                
+                cropLevel = 0;
+                farmLevel = 1;
+                timer = timerMax;
+                nearFarm = 0f;
+                nearWater = 0f;
+                GameManager.gm.searchShell();
             }
+
+            //Determines which crop sprite to use and how far along the crop is
+            cropLevel += 1;
+            if (cropLevel >= cropSprites.Length)
+            {
+                cropLevel = cropSprites.Length - 1;
+            }
+            if(cropLevel < 0)
+            {
+                cropLevel = 0;
+            }
+
+            //Changes the sprite
+            crop.GetComponent<SpriteRenderer>().sprite = cropSprites[cropLevel];
+            cropBack.GetComponent<SpriteRenderer>().sprite = cropBackSprites[cropLevel];
         }
     }
 
     //Changes the appearance of the tile
     public void updateSprites()
     {
+        checkDecor();
+        checkCliffFaces();
+
+
         //Sets tile to hole
         if (tileNum == 0)
         {
             sr.sprite = pit;
 
-            /*//Fills with water when near it
-            if (nearWater > 0 || edge)
+            //If raining, becomes a drain tile
+            if (GameManager.gm.weather == 1)
             {
-                getWaterParent();
-            }*/
+                drainIndex = waterDrain.Length - 1;
+                tileNum = 6;
+            }
         }
 
         //Sets tile to grass
         if (tileNum == 1)
         {
-            sr.sprite = grass1;
+            sr.sprite = grass[variantNum];
         }
 
         //sets tile to crop
         if (tileNum == 2)
         {
             sr.sprite = seed;
+
+            //Sets crop sprites to match as well
+            //Changes sprites to wheat
+            if(farmLevel == 1)
+            {
+
+                if(gsCopy.level1CropFront.Length > 0 && gsCopy.level1CropBack.Length > 0)
+                {
+
+                    cropSprites = gsCopy.level1CropFront;
+                    cropBackSprites = gsCopy.level1CropBack;
+                    crop.GetComponent<SpriteRenderer>().sprite = cropSprites[cropLevel];
+                    cropBack.GetComponent<SpriteRenderer>().sprite = cropBackSprites[cropLevel];
+                }
+                else
+                {
+                    print(Glossary.gs.powerNames[3]);
+                }
+
+            }
+            //Changes sprites to Tomatoes (Default)
+            else if (farmLevel == 2)
+            {
+                if (gsCopy.level2CropFront.Length > 0 && gsCopy.level2CropBack.Length > 0)
+                {
+                    cropSprites = gsCopy.level2CropFront;
+                    cropBackSprites = gsCopy.level2CropBack;
+                    crop.GetComponent<SpriteRenderer>().sprite = cropSprites[cropLevel];
+                    cropBack.GetComponent<SpriteRenderer>().sprite = cropBackSprites[cropLevel];
+                }
+            }
+            //Changes sprites to grapes
+            else if (farmLevel == 3)
+            {
+                if (gsCopy.level3CropFront.Length > 0 && gsCopy.level3CropBack.Length > 0)
+                {
+                    cropSprites = gsCopy.level3CropFront;
+                    cropBackSprites = gsCopy.level3CropBack;
+                    crop.GetComponent<SpriteRenderer>().sprite = cropSprites[cropLevel];
+                    cropBack.GetComponent<SpriteRenderer>().sprite = cropBackSprites[cropLevel];
+                }
+            }
+        }
+
+        //Sets tile to rock
+        if(tileNum == 3)
+        {
+            int tempNum = variantNum;
+            //Ensures there will be no OOB error with this list
+            while (tempNum >= rock1.Length)
+            {
+                tempNum -= rock1.Length - 1;
+            }
+
+            sr.sprite = rock1[tempNum];
         }
 
 
-        //sets tile to rock
-        if (tileNum == 3)
+        //Activates transition sprites between rock & ash
+        if (tileNum == 3 || tileNum == 8)
         {
-            sr.sprite = rock1;
+
+            rockDeactivated = false;
+
+            //The the Neighbors are grass, activates tile toppers
+            //Top Left
+            if(neighbors[0] != null && neighbors[0].tileNum == 1)
+            {
+                rockToppers[1].SetActive(true);
+            }
+            else
+            {
+                rockToppers[1].SetActive(false);
+            }
+
+            //Top Right
+            if (neighbors[1] != null && neighbors[1].tileNum == 1)
+            {
+                rockToppers[0].SetActive(true);
+            }
+            else
+            {
+                rockToppers[0].SetActive(false);
+            }
+
+            //Bottom Right
+            if (neighbors[2] != null && neighbors[2].tileNum == 1)
+            {
+                rockToppers[3].SetActive(true);
+            }
+            else
+            {
+                rockToppers[3].SetActive(false);
+            }
+
+            //Bottom Left
+            if (neighbors[3] != null && neighbors[3].tileNum == 1)
+            {
+                rockToppers[2].SetActive(true);
+            }
+            else
+            {
+                rockToppers[2].SetActive(false);
+            }
+        }
+        else if (!rockDeactivated)
+        {
+            //Deactivates the topper sprites for the rock
+            foreach(GameObject t in rockToppers)
+            {
+                t.SetActive(false);
+            }
+            rockDeactivated = true;
         }
 
         //Sets tile to spring
@@ -736,26 +1007,68 @@ public class MapTile : MonoBehaviour {
         //Water draining
         if(tileNum == 6)
         {
-
-            //Drains water away by incrementing timer
-            if(drainIndex < waterDrain.Length)
+            //If the search passes over this tile...
+            if (!searched)
             {
-                sr.sprite = waterDrain[drainIndex];
-                if(drainTimer > 0)
+                //Increments nearby tiles...
+                GameManager.gm.incWater((int)gridPos.x, (int)gridPos.y);
+                searched = true;
+                isolated = true;
+            }
+
+            //If it isn't raining...
+            if (GameManager.gm.weather != 1)
+            {
+                //Drains water away by incrementing timer
+                if (drainIndex < waterDrain.Length)
                 {
-                    drainTimer -= Time.deltaTime;
+                    sr.sprite = waterDrain[drainIndex];
+                    if (drainTimer > 0)
+                    {
+                        drainTimer -= Time.deltaTime;
+
+                        //If the sun's out, water drains twice as quick
+                        if(GameManager.gm.weather == 2)
+                        {
+                            drainTimer -= Time.deltaTime;
+                        }
+                    }
+                    else
+                    {
+                        drainTimer = drainTimerMax;
+                        drainIndex++;
+                    }
                 }
-                else
+                else //Changes tile to empty when drain is complete
                 {
-                    drainTimer = drainTimerMax;
-                    drainIndex++;
+                    tileNum = 0;
+                    //GameManager.gm.decWater((int)gridPos.x, (int)gridPos.y);
+                    GameManager.gm.searchShell();
                 }
             }
-            else //Changes tile to empty when drain is complete
+            //If it's raining, the water begins to fill instead
+            else
             {
-                tileNum = 0;
-                //GameManager.gm.decWater((int)gridPos.x, (int)gridPos.y);
-                GameManager.gm.searchShell();
+                //Drain happens in reverse
+                if(drainIndex > 0)
+                {
+                    sr.sprite = waterDrain[drainIndex];
+                    if (drainTimer > 0)
+                    {
+                        drainTimer -= Time.deltaTime;
+                    }
+                    else
+                    {
+                        drainTimer = drainTimerMax;
+                        drainIndex--;
+                    }
+                }
+                //Once all drain tiles have been filled, the tile becomes water
+                else
+                {
+                    tileNum = 5;
+                    GameManager.gm.searchShell();
+                }
             }
         }
         else //resets water drain animation for next time
@@ -770,10 +1083,20 @@ public class MapTile : MonoBehaviour {
             sr.sprite = water1;
 
             //If the search passes over this tile, 
-            //it will begin to drain
             if (!searched)
             {
-                tileNum = 6;
+                //it will begin to drain unless it is raining...
+                if (GameManager.gm.weather != 1)
+                {
+                    tileNum = 6;
+                }
+                //Otherwise, it will simply increment nearby tiles...
+                else
+                {
+                    GameManager.gm.incWater((int)gridPos.x, (int)gridPos.y);
+                    searched = true;
+                    isolated = true;
+                }    
             }
         }
 
@@ -835,6 +1158,18 @@ public class MapTile : MonoBehaviour {
             else if (tileNum == 5 || tileNum == 6)
             {
                 s.GetComponent<SpriteRenderer>().color = waterColor;
+            }
+            else if (tileNum == 7)
+            {
+                s.GetComponent<SpriteRenderer>().color = fireColor;
+            }
+            else if (tileNum == 8)
+            {
+                s.GetComponent<SpriteRenderer>().color = ashColor;
+            }
+            else
+            {
+                s.GetComponent<SpriteRenderer>().color = emptyColor;
             }
         }
         //Otherwise, display dedicated enemy color
@@ -1085,8 +1420,172 @@ public class MapTile : MonoBehaviour {
     {
         tileNum = 7;
         fireTicks = 5;
-        fireSpreadChance = percen;
         ashBonus = true;
         timer = timerMax/2;
+
+        //If raining, the spread chance is cut in half
+        if(GameManager.gm.weather == 1)
+        {
+            percen = percen / 2;
+        }
+
+        fireSpreadChance = percen;
+    }
+
+    public void spawnMessage()
+    {
+
+    }
+
+    //Determines whether cliff transition faces should be active
+    public void checkCliffFaces()
+    {
+        //If this tile is a pit...
+        if (tileNum == 0 || tileNum == 4 || tileNum == 5 || tileNum == 6)
+        {
+            //Ensures Northern neighbors exist
+            if (neighbors[0] != null && neighbors[1] != null)
+            {
+                //Checks to see if neighbors North are not pits
+                if ((neighbors[0].tileNum != 0 && neighbors[0].tileNum != 4 && neighbors[0].tileNum != 5 && neighbors[0].tileNum != 6)
+                    && (neighbors[1].tileNum != 0 && neighbors[1].tileNum != 4 && neighbors[1].tileNum != 5 && neighbors[1].tileNum != 6))
+                {
+
+                    northCliffFace.SetActive(true);
+                    northCliffHead.SetActive(true);
+
+                    //Checks which cliff head sprite to use
+                    if (neighbors[0].tileNum == 1)
+                    {
+                        //GG
+                        if (neighbors[1].tileNum == 1)
+                        {
+                            northCliffHead.GetComponent<SpriteRenderer>().sprite = pitHeads[0];
+                        }
+                        //GR
+                        else
+                        {
+                            northCliffHead.GetComponent<SpriteRenderer>().sprite = pitHeads[2];
+                        }
+                    }
+                    else
+                    {
+                        //RG
+                        if (neighbors[1].tileNum == 1)
+                        {
+                            northCliffHead.GetComponent<SpriteRenderer>().sprite = pitHeads[3];
+                        }
+                        //RR
+                        else
+                        {
+                            northCliffHead.GetComponent<SpriteRenderer>().sprite = pitHeads[1];
+                        }
+                    }
+
+                }
+                else
+                {
+                    northCliffFace.SetActive(false);
+                    northCliffHead.SetActive(false);
+                }
+            }
+
+            //Checks to see if neighbors South are pits
+            if (neighbors[2] != null && neighbors[3] != null)
+            {
+                if ((neighbors[2].tileNum != 0 && neighbors[2].tileNum != 4 && neighbors[2].tileNum != 5 && neighbors[2].tileNum != 6)
+                    && (neighbors[3].tileNum != 0 && neighbors[3].tileNum != 4 && neighbors[3].tileNum != 5 && neighbors[3].tileNum != 6))
+                {
+
+                    southCliffHead.SetActive(true);
+
+                }
+                else
+                {
+
+                    southCliffHead.SetActive(false);
+                }
+            }
+        }
+        //If not a pit, disables cliff faces
+        else
+        {
+            northCliffFace.SetActive(false);
+            northCliffHead.SetActive(false);
+            southCliffHead.SetActive(false);
+        }
+    }
+
+    //Determines which decorations to use
+    public void checkDecor()
+    {
+        //If a grass tile...
+        if(tileNum == 1)
+        {
+            //If subvariant is greater than number of decorations, deactivates decor
+            if(subVariant >= grassDecor.Length && decor.active)
+            {
+                decor.SetActive(false);
+            }
+
+            //Otherwise, sets a bit of decor based on subvariant
+            else if (subVariant < grassDecor.Length)
+            {
+                decor.SetActive(true);
+                decor.GetComponent<SpriteRenderer>().sprite = grassDecor[subVariant];
+            }
+
+
+        }
+        //If a pit tile
+        else if (tileNum == 0)
+        {
+            //If NW neighbor is at a higher elevation
+            if(neighbors[0] != null && neighbors[0].tileNum != 0 && neighbors[0].tileNum != 4 && neighbors[0].tileNum != 5 && neighbors[0].tileNum != 6)
+            {
+                decor.SetActive(true);
+                decor.GetComponent<SpriteRenderer>().sprite = pitShadow;
+            }
+            else
+            {
+                decor.SetActive(false);
+            }
+        }
+        //If a different tile, removes decor
+        else
+        {
+            decor.SetActive(false);
+        }
+
+
+        //If a fire tile, with animated decor
+        if (tileNum == 7 && !fireSpawned)
+        {
+            fireSpawned = true;
+            GameObject fire = Instantiate(fireDecor, gameObject.transform);
+            fire.transform.parent = gameObject.transform;
+            fire.transform.localPosition = new Vector3(0f, 2f, -2f);
+            fire.GetComponent<FireController>().parent = this;
+        }
+        else if(tileNum != 7)
+        {
+            fireSpawned = false;
+        }
+    }
+
+    public void determineTimer()
+    {
+        //The timer is active before both players are ready, and then, also
+        //If the round is currently going.
+        if ((!GameManager.gm.bothReady) ||
+            (GameManager.gm.gameStart))
+        {
+            timeActive = true;
+        }
+        //Otherwise, the timer is false
+        else
+        {
+            timeActive = false;
+        }
     }
 }
